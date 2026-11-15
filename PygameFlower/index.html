@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌸 Love Me, Love Me Not</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0e1a;display:flex;align-items:center;justify-content:center;font-family:Georgia,serif;cursor:pointer;user-select:none;-webkit-user-select:none}
+canvas{display:block;max-width:100vw;max-height:100vh;object-fit:contain}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+"use strict";
+// ── Constants ──
+const W = 960, H = 640;
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = W; canvas.height = H;
+
+// ── Offscreen canvases ──
+const bgCanvas = document.createElement('canvas');
+bgCanvas.width = W; bgCanvas.height = H;
+const bgCtx = bgCanvas.getContext('2d');
+
+// ── Utility ──
+function lerp(a,b,t){return a+(b-a)*t}
+function clamp(v,lo,hi){return v<lo?lo:v>hi?hi:v}
+function smoothstep(a,b,t){t=clamp((t-a)/(b-a),0,1);return t*t*(3-2*t)}
+function rand(a,b){return a+Math.random()*(b-a)}
+function randInt(a,b){return Math.floor(rand(a,b+1))}
+function dist(x1,y1,x2,y2){return Math.hypot(x2-x1,y2-y1)}
+
+// ── Pre-render Background ──
+function renderBackground(){
+  const c = bgCtx;
+  // Sky gradient
+  for(let y=0;y<H;y++){
+    const t = smoothstep(0,H,y);
+    const r = lerp(10,26,t), g = lerp(14,38,t), b = lerp(26,58,t);
+    c.fillStyle=`rgb(${r|0},${g|0},${b|0})`;
+    c.fillRect(0,y,W,1);
+  }
+  // Moon
+  const mx=175,my=130,mr=34;
+  // Glow rings
+  const glows=[[80,0.04],[60,0.07],[40,0.12],[28,0.18],[18,0.28]];
+  for(const[extra,a] of glows){
+    c.beginPath();c.arc(mx,my,mr+extra,0,Math.PI*2);
+    c.fillStyle=`rgba(180,210,255,${a})`;c.fill();
+  }
+  // Main disk
+  c.beginPath();c.arc(mx,my,mr,0,Math.PI*2);
+  c.fillStyle='rgb(245,248,255)';c.fill();
+  // Craters
+  const craters=[[mx-10,my-8,6],[mx+8,my+5,4],[mx-4,my+12,5],[mx+14,my-6,3],[mx-14,my+4,3.5]];
+  for(const[cx,cy,cr] of craters){
+    c.beginPath();c.arc(cx,cy,cr,0,Math.PI*2);
+    c.fillStyle='rgba(220,225,235,0.55)';c.fill();
+  }
+
+  // Hills
+  const hills=[
+    {base:425,color:[18,28,42],amp:40,freq:0.004,phase:0.8},
+    {base:475,color:[14,22,34],amp:32,freq:0.0055,phase:2.4},
+    {base:535,color:[9,15,24],amp:22,freq:0.007,phase:4.1}
+  ];
+  for(const h of hills){
+    c.beginPath();
+    c.moveTo(0,H);
+    for(let x=0;x<=W;x++){
+      const centerDip = Math.exp(-((x-W/2)**2)/(2*180*180))*25;
+      const y = h.base - Math.sin(x*h.freq+h.phase)*h.amp
+        - Math.sin(x*h.freq*2.1+h.phase*1.4)*(h.amp*0.28) - centerDip;
+      x===0?c.moveTo(x,y):c.lineTo(x,y);
+    }
+    c.lineTo(W,H);c.lineTo(0,H);c.closePath();
+    c.fillStyle=`rgb(${h.color[0]},${h.color[1]},${h.color[2]})`;
+    c.fill();
+  }
+
+  // Grass band
+  c.fillStyle='rgb(7,12,19)';
+  c.fillRect(0,H-65,W,65);
+  // Grass blades
+  for(let i=0;i<320;i++){
+    const gx=rand(0,W),gy=H-65+rand(-4,2);
+    const gh=rand(6,18),gw=rand(1.5,3.5);
+    const gr=20+randInt(-5,5),gg=36+randInt(-8,8),gb=42+randInt(-6,6);
+    c.fillStyle=`rgb(${gr},${gg},${gb})`;
+    c.beginPath();
+    c.moveTo(gx-gw/2,gy);c.lineTo(gx+rand(-2,2),gy-gh);c.lineTo(gx+gw/2,gy);
+    c.closePath();c.fill();
+  }
+}
+
+// ── Stars ──
+const stars=[];
+function initStars(){
+  stars.length=0;
+  const mx=175,my=130,mr=34;
+  for(let i=0;i<75;i++){
+    let x,y;
+    do{x=rand(0,W);y=rand(0,400);}while(dist(x,y,mx,my)<mr+18);
+    const big=Math.random()<0.12;
+    stars.push({
+      baseX:x, baseY:y,
+      r:big?(Math.random()<0.5?1.5:2):1,
+      period:rand(1.8,4.0),
+      phase:rand(0,Math.PI*2),
+      driftSpeed:big?rand(1.8,4.8):rand(0.8,2.2),
+      wobbleAmp:rand(2.0,4.5),
+      wobbleFreq:rand(0.4,0.9),
+      wobblePhase:rand(0,Math.PI*2)
+    });
+  }
+}
+
+function drawStars(t){
+  for(const s of stars){
+    const bright = 0.35+0.65*(0.5+0.5*Math.sin(t/s.period*Math.PI*2+s.phase));
+    const rawX = s.baseX + s.driftSpeed*t;
+    const drawX = ((rawX % W) + W) % W;
+    const drawY = s.baseY + Math.sin(t*s.wobbleFreq+s.wobblePhase)*s.wobbleAmp;
+    ctx.globalAlpha=bright;
+    ctx.fillStyle='#fff';
+    if(s.r<=1){
+      ctx.fillRect(drawX,drawY,1,1);
+    } else {
+      ctx.beginPath();ctx.arc(drawX,drawY,s.r,0,Math.PI*2);ctx.fill();
+    }
+  }
+  ctx.globalAlpha=1;
+}
+
+// ── Fireflies ──
+const fireflies=[];
+function initFireflies(){
+  fireflies.length=0;
+  for(let i=0;i<20;i++){
+    fireflies.push({
+      x:rand(30,W-30),y:rand(200,H-80),
+      phaseX:rand(0,Math.PI*2),phaseY:rand(0,Math.PI*2),
+      freqX:rand(0.3,0.7),freqY:rand(0.25,0.6),
+      ampX:rand(40,100),ampY:rand(20,50),
+      driftX:rand(-8,8),driftY:rand(-5,5),
+      baseR:rand(4,7.5),
+      pulsePhase:rand(0,Math.PI*2),pulseFreq:rand(0.8,1.6),
+      ox:0,oy:0
+    });
+    const f=fireflies[i];f.ox=f.x;f.oy=f.y;
+  }
+}
+
+function drawFireflies(t){
+  const prev = ctx.globalCompositeOperation;
+  ctx.globalCompositeOperation='lighter';
+  for(const f of fireflies){
+    let fx = f.ox + Math.sin(t*f.freqX+f.phaseX)*f.ampX + f.driftX*t;
+    let fy = f.oy + Math.cos(t*f.freqY+f.phaseY)*f.ampY + f.driftY*t*0.3;
+    // wrap bounds
+    fx = ((fx%W)+W)%W;
+    fy = ((fy%(H-100))+H-100)%(H-100)+100;
+    const pulse = 0.8+0.35*Math.sin(t*f.pulseFreq*Math.PI*2+f.pulsePhase);
+    const r = f.baseR*pulse;
+    // Outer glow
+    const grd=ctx.createRadialGradient(fx,fy,0,fx,fy,r*3);
+    grd.addColorStop(0,'rgba(160,240,140,0.35)');
+    grd.addColorStop(0.5,'rgba(160,240,140,0.1)');
+    grd.addColorStop(1,'rgba(160,240,140,0)');
+    ctx.fillStyle=grd;
+    ctx.beginPath();ctx.arc(fx,fy,r*3,0,Math.PI*2);ctx.fill();
+    // Core
+    const grd2=ctx.createRadialGradient(fx,fy,0,fx,fy,r);
+    grd2.addColorStop(0,'rgba(255,255,220,0.9)');
+    grd2.addColorStop(1,'rgba(255,255,220,0)');
+    ctx.fillStyle=grd2;
+    ctx.beginPath();ctx.arc(fx,fy,r,0,Math.PI*2);ctx.fill();
+  }
+  ctx.globalCompositeOperation=prev;
+}
+
+// ── Stem & Leaves & Flower ──
+const FLOWER_CX = 499, FLOWER_CY = 269;
+const PI = Math.PI;
+
+// Wind state
+let windTime = 0;
+function getWind(t){
+  return {
+    x: Math.sin(t*1.1)*7.5 + Math.sin(t*1.85+0.6)*3.2,
+    y: Math.cos(t*2.2)*1.4
+  };
+}
+
+// Recoil state
+let recoil = {active:false, angle:0, impulse:0, timer:0, duration:0.32};
+function getRecoilOffset(){
+  if(!recoil.active) return {x:0,y:0};
+  const p = recoil.timer/recoil.duration;
+  if(p>=1){recoil.active=false;return {x:0,y:0};}
+  const v = recoil.impulse * Math.exp(-7*p) * Math.cos(p*PI*3.5);
+  return {x: Math.cos(recoil.angle)*v, y: Math.sin(recoil.angle)*v};
+}
+
+// Screen shake
+let shake = {active:false, timer:0, duration:0.28, ampX:7, ampY:5};
+function getShakeOffset(){
+  if(!shake.active) return {x:0,y:0};
+  const p = shake.timer/shake.duration;
+  if(p>=1){shake.active=false;return {x:0,y:0};}
+  const decay = Math.exp(-6*p);
+  return {
+    x: Math.sin(shake.timer*45)*shake.ampX*decay,
+    y: Math.cos(shake.timer*52)*shake.ampY*decay
+  };
+}
+
+// Stem points
+function getStemPoints(wind, recoilOff, t){
+  const pts=[];
+  const steps=42;
+  for(let i=0;i<=steps;i++){
+    const frac=i/steps;
+    const baseX = FLOWER_CX - 20*Math.sin(frac*PI*0.92) - frac*6;
+    const baseY = FLOWER_CY + frac*(H-FLOWER_CY+40);
+    // wind influence decreases toward root
+    const windInfluence = 1 - frac;
+    const wx = (wind.x + recoilOff.x) * windInfluence;
+    const wy = (wind.y + recoilOff.y) * windInfluence;
+    pts.push({x: baseX + wx, y: baseY + wy});
+  }
+  return pts;
+}
+
+function drawStem(pts){
+  const layers=[
+    {color:'rgb(20,48,25)',w:11,off:0},
+    {color:'rgb(45,105,50)',w:9,off:0},
+    {color:'rgb(88,175,95)',w:3,off:-1.5}
+  ];
+  for(const l of layers){
+    ctx.strokeStyle=l.color;
+    ctx.lineWidth=l.w;
+    ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x+l.off,pts[0].y);
+    for(let i=1;i<pts.length;i++){
+      ctx.lineTo(pts[i].x+l.off,pts[i].y);
+    }
+    ctx.stroke();
+  }
+}
+
+// ── Leaves ──
+const leafDefs = [
+  {stemIdx:13, side:-1, windPhase:0.5, windFlex:1.1, len:55, wid:16},
+  {stemIdx:20, side:1, windPhase:1.8, windFlex:0.9, len:60, wid:18},
+  {stemIdx:29, side:-1, windPhase:3.1, windFlex:1.3, len:50, wid:14}
+];
+
+function drawLeaves(pts, t){
+  for(const ld of leafDefs){
+    const base = pts[Math.min(ld.stemIdx, pts.length-1)];
+    const above = pts[Math.min(ld.stemIdx-2, pts.length-1)];
+    const stemAngle = Math.atan2(base.y-above.y, base.x-above.x);
+    const leafAngle = stemAngle + ld.side * (PI*0.35 + Math.sin(t*ld.windFlex+ld.windPhase)*0.15);
+
+    const tipX = base.x + Math.cos(leafAngle)*ld.len;
+    const tipY = base.y + Math.sin(leafAngle)*ld.len;
+    const perpAngle = leafAngle + PI/2;
+    const midX = (base.x+tipX)/2, midY = (base.y+tipY)/2;
+
+    // Leaf shape
+    const cp1x = midX + Math.cos(perpAngle)*ld.wid;
+    const cp1y = midY + Math.sin(perpAngle)*ld.wid;
+    const cp2x = midX - Math.cos(perpAngle)*ld.wid;
+    const cp2y = midY - Math.sin(perpAngle)*ld.wid;
+
+    // Base layer
+    ctx.fillStyle='rgb(22,55,28)';
+    ctx.beginPath();
+    ctx.moveTo(base.x,base.y);
+    ctx.quadraticCurveTo(cp1x,cp1y,tipX,tipY);
+    ctx.quadraticCurveTo(cp2x,cp2y,base.x,base.y);
+    ctx.fill();
+
+    // Mid layer
+    ctx.fillStyle='rgba(40,95,45,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(base.x,base.y);
+    ctx.quadraticCurveTo(cp1x*0.97+base.x*0.03, cp1y*0.97+base.y*0.03, tipX*0.95+base.x*0.05, tipY*0.95+base.y*0.05);
+    ctx.quadraticCurveTo(cp2x*0.97+base.x*0.03, cp2y*0.97+base.y*0.03, base.x, base.y);
+    ctx.fill();
+
+    // Vein
+    ctx.strokeStyle='rgba(70,140,75,0.5)';
+    ctx.lineWidth=1;
+    ctx.beginPath();
+    ctx.moveTo(base.x,base.y);
+    ctx.lineTo(tipX,tipY);
+    ctx.stroke();
+  }
+}
+
+// ── Petals ──
+const PETAL_ANGLES = [30,90,150,210,270,330]; // degrees
+const DETACH_ORDER = [0,4,2,5,1,3];
+let detachCount = 0;
+const petalStates = []; // {attached:true} or falling data
+
+function initPetals(){
+  detachCount = 0;
+  petalStates.length = 0;
+  for(let i=0;i<6;i++){
+    petalStates.push({attached:true});
+  }
+}
+
+// Pre-render petal to offscreen canvas
+const petalCanvases = [];
+const PETAL_W = 120, PETAL_H = 180;
+
+function createPetalCanvas(index){
+  const oc = document.createElement('canvas');
+  oc.width = PETAL_W; oc.height = PETAL_H;
+  const c = oc.getContext('2d');
+  const isOuter = (index%2===0);
+  const pw = isOuter ? 42 : 36;
+  const ph = isOuter ? 82 : 72;
+  const cx = PETAL_W/2, tipY = 10, baseY = tipY + ph;
+
+  // Petal shape path function
+  function petalPath(c, scaleW, scaleH, waviness){
+    const w = pw*scaleW, h = ph*scaleH;
+    const tip = tipY + (ph-h)/2;
+    const base = tip + h;
+    c.beginPath();
+    const steps = 60;
+    for(let i=0;i<=steps;i++){
+      const t = i/steps;
+      const angle = t * PI;
+      // tapered ellipse shape with wavy edge
+      let r = Math.sin(angle);
+      // taper more at tip
+      r *= (0.5 + 0.5*Math.sin(t*PI));
+      if(waviness>0) r += Math.sin(t*PI*12)*0.04*waviness;
+      const px = cx + r * w * (t < 0.5 ? 1 : 1);
+      const py = tip + t * h;
+      if(i===0) c.moveTo(px,py); else c.lineTo(px,py);
+    }
+    for(let i=steps;i>=0;i--){
+      const t = i/steps;
+      const angle = t * PI;
+      let r = Math.sin(angle);
+      r *= (0.5 + 0.5*Math.sin(t*PI));
+      if(waviness>0) r += Math.sin(t*PI*12+2)*0.04*waviness;
+      const px = cx - r * w;
+      const py = tipY + (ph-ph*scaleH)/2 + t * ph*scaleH;
+      c.lineTo(px,py);
+    }
+    c.closePath();
+  }
+
+  // Layers from outside in
+  // White edge
+  petalPath(c,1.0,1.0,1);
+  c.fillStyle='rgb(255,245,250)';c.fill();
+  // Pale pink
+  petalPath(c,0.92,0.96,0.5);
+  c.fillStyle='rgb(252,210,228)';c.fill();
+  // Bright pink
+  petalPath(c,0.82,0.90,0.3);
+  c.fillStyle='rgb(235,120,170)';c.fill();
+  // Deep magenta center
+  petalPath(c,0.6,0.75,0);
+  c.fillStyle='rgb(195,50,110)';c.fill();
+  // Dark core near base
+  petalPath(c,0.35,0.45,0);
+  c.fillStyle='rgb(140,25,70)';c.fill();
+
+  // Green-yellow throat
+  c.beginPath();
+  c.ellipse(cx, baseY-8, 8, 14, 0, 0, PI*2);
+  c.fillStyle='rgba(140,180,60,0.6)';c.fill();
+
+  // Central vein/rib
+  c.strokeStyle='rgba(200,80,130,0.4)';
+  c.lineWidth=1.2;
+  c.beginPath();
+  c.moveTo(cx,tipY+5);c.lineTo(cx,baseY-5);
+  c.stroke();
+
+  // Side veins
+  for(let v=0;v<5;v++){
+    const vy = tipY + 15 + v*(ph-20)/5;
+    const spread = 6 + v*3;
+    c.strokeStyle='rgba(200,80,130,0.2)';
+    c.lineWidth=0.8;
+    c.beginPath();c.moveTo(cx,vy);c.lineTo(cx-spread,vy+8);c.stroke();
+    c.beginPath();c.moveTo(cx,vy);c.lineTo(cx+spread,vy+8);c.stroke();
+  }
+
+  // Papillae spots
+  for(let s=0;s<60;s++){
+    const sx = cx + rand(-pw*0.7, pw*0.7);
+    const sy = rand(tipY+10, baseY-10);
+    // check roughly inside petal
+    const frac = (sy-tipY)/ph;
+    const maxW = pw * Math.sin(frac*PI) * (0.5+0.5*Math.sin(frac*PI));
+    if(Math.abs(sx-cx) > maxW*0.85) continue;
+    const sr = rand(0.8,2.2);
+    c.fillStyle=`rgba(${randInt(100,150)},${randInt(15,40)},${randInt(50,80)},${rand(0.4,0.8)})`;
+    c.beginPath();c.arc(sx,sy,sr,0,PI*2);c.fill();
+  }
+
+  return oc;
+}
+
+function initPetalCanvases(){
+  petalCanvases.length=0;
+  for(let i=0;i<6;i++) petalCanvases.push(createPetalCanvas(i));
+}
+
+function drawAttachedPetals(fcx, fcy, t){
+  for(let i=0;i<6;i++){
+    if(!petalStates[i].attached) continue;
+    const angleDeg = PETAL_ANGLES[i];
+    const angleRad = angleDeg * PI/180;
+    const isOuter = (i%2===0);
+    const petalLen = isOuter ? 82 : 72;
+
+    ctx.save();
+    ctx.translate(fcx, fcy);
+    ctx.rotate(angleRad - PI/2);
+    // Slight wind sway per petal
+    ctx.rotate(Math.sin(t*1.3+i*1.1)*0.03);
+    // Draw petal centered so base is at origin
+    ctx.drawImage(petalCanvases[i], -PETAL_W/2, -petalLen+5);
+    ctx.restore();
+  }
+}
+
+// ── Receptacle / Center ──
+function drawCenter(fcx, fcy, t){
+  // Receptacle
+  const layers = [
+    {r:14, color:'rgb(30,65,25)'},
+    {r:11, color:'rgb(50,110,40)'},
+    {r:8, color:'rgb(90,155,55)'},
+    {r:5, color:'rgb(140,180,60)'}
+  ];
+  for(const l of layers){
+    ctx.beginPath();ctx.arc(fcx,fcy,l.r,0,PI*2);
+    ctx.fillStyle=l.color;ctx.fill();
+  }
+
+  // Petal scars for detached petals
+  for(let i=0;i<6;i++){
+    if(petalStates[i].attached) continue;
+    const angleDeg = PETAL_ANGLES[i];
+    const angleRad = angleDeg * PI/180;
+    const sx = fcx + Math.cos(angleRad)*12;
+    const sy = fcy + Math.sin(angleRad)*12;
+    ctx.beginPath();ctx.arc(sx,sy,3.5,0,PI*2);
+    ctx.fillStyle='rgba(80,50,30,0.6)';ctx.fill();
+  }
+
+  // Stamens
+  for(let i=0;i<6;i++){
+    const a = (i*60+15)*PI/180;
+    const len = 28 + Math.sin(t*0.8+i)*3;
+    const sway = Math.sin(t*1.2+i*0.7)*0.08;
+    const ex = fcx + Math.cos(a+sway)*len;
+    const ey = fcy + Math.sin(a+sway)*len;
+    // Filament
+    ctx.strokeStyle='rgb(140,175,80)';
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    const midx = fcx + Math.cos(a+sway)*len*0.5 + Math.sin(a)*4;
+    const midy = fcy + Math.sin(a+sway)*len*0.5 + Math.cos(a)*4;
+    ctx.moveTo(fcx,fcy);
+    ctx.quadraticCurveTo(midx,midy,ex,ey);
+    ctx.stroke();
+    // Anther
+    ctx.fillStyle='rgb(180,120,40)';
+    ctx.beginPath();
+    ctx.ellipse(ex,ey,3.5,2,a+sway,0,PI*2);
+    ctx.fill();
+    ctx.fillStyle='rgb(210,160,50)';
+    ctx.beginPath();
+    ctx.ellipse(ex,ey,2.5,1.3,a+sway,0,PI*2);
+    ctx.fill();
+  }
+
+  // Pistil
+  const pa = -PI/2 + Math.sin(t*0.9)*0.06;
+  const plen = 22;
+  const px = fcx + Math.cos(pa)*plen;
+  const py = fcy + Math.sin(pa)*plen;
+  ctx.strokeStyle='rgb(100,160,70)';
+  ctx.lineWidth=2.5;
+  ctx.beginPath();
+  ctx.moveTo(fcx,fcy);
+  ctx.quadraticCurveTo(fcx+3,fcy+Math.sin(pa)*plen*0.4,px,py);
+  ctx.stroke();
+  // Stigma
+  ctx.fillStyle='rgb(120,190,80)';
+  ctx.beginPath();ctx.arc(px,py,3,0,PI*2);ctx.fill();
+}
+
+// ── Falling petals ──
+const fallingPetals = [];
+
+function detachPetal(){
+  if(detachCount>=6) return;
+  const idx = DETACH_ORDER[detachCount];
+  petalStates[idx].attached = false;
+  detachCount++;
+
+  const angleDeg = PETAL_ANGLES[idx];
+  const angleRad = angleDeg * PI/180;
+  const dir = Math.cos(angleRad) >= 0 ? 1 : -1;
+
+  const wind = getWind(windTime);
+  const fcx = FLOWER_CX + wind.x + getRecoilOffset().x;
+  const fcy = FLOWER_CY + wind.y + getRecoilOffset().y;
+
+  fallingPetals.push({
+    idx,
+    x: fcx + Math.cos(angleRad)*40,
+    y: fcy + Math.sin(angleRad)*40,
+    vx: dir * rand(70,120),
+    vy: Math.sin(angleRad)*50 + rand(-40,-10),
+    rot: angleRad,
+    rotSpeed: (rand(85,145)*PI/180) * dir,
+    swayFreq: rand(3,5),
+    swayAmp: rand(70,110),
+    swayPhase: rand(0,PI*2),
+    timer: 0,
+    landed: false,
+    groundY: H - 35
+  });
+
+  // Recoil
+  recoil.active = true;
+  recoil.angle = angleRad + PI; // opposite direction
+  recoil.impulse = 14;
+  recoil.timer = 0;
+
+  // Shake
+  shake.active = true;
+  shake.timer = 0;
+
+  // Text update
+  updateText();
+}
+
+function updateFallingPetals(dt){
+  for(const fp of fallingPetals){
+    if(fp.landed) continue;
+    fp.timer += dt;
+    fp.vy += 1250 * dt;
+    fp.vy = Math.min(fp.vy, 780);
+    fp.x += fp.vx * dt + Math.sin(fp.timer*fp.swayFreq+fp.swayPhase)*fp.swayAmp*dt;
+    fp.y += fp.vy * dt;
+    fp.rot += fp.rotSpeed * dt + Math.cos(fp.timer*2)*0.5*dt;
+
+    if(fp.y >= fp.groundY){
+      fp.y = fp.groundY;
+      fp.landed = true;
+      fp.vx = 0;
+      fp.vy = 0;
+      checkAllLanded();
+    }
+  }
+}
+
+function drawFallingPetals(){
+  for(const fp of fallingPetals){
+    ctx.save();
+    ctx.translate(fp.x, fp.y);
+    ctx.rotate(fp.rot);
+    const sc = 0.7;
+    ctx.scale(sc,sc);
+    ctx.globalAlpha = fp.landed ? 0.7 : 1;
+    ctx.drawImage(petalCanvases[fp.idx], -PETAL_W/2, -PETAL_H/2);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+}
+
+function checkAllLanded(){
+  if(detachCount < 6) return;
+  if(fallingPetals.every(fp => fp.landed)){
+    heartsActive = true;
+    heartsTimer = 0;
+    // Final text
+    textTarget = "LOVE ME";
+    textSwitch = true;
+    textSwitchTimer = 0;
+  }
+}
+
+// ── Text ──
+let textVisible = false;
+let textCurrent = "";
+let textTarget = "";
+let textSwitch = false;
+let textSwitchTimer = 0;
+const TEXT_FADE_DUR = 0.28;
+let textPulseTimer = 0;
+
+function updateText(){
+  textVisible = true;
+  const isOdd = (detachCount % 2 === 1);
+  textTarget = isOdd ? "LOVE ME" : "LOVE ME NOT";
+  textSwitch = true;
+  textSwitchTimer = 0;
+  textPulseTimer = 0;
+}
+
+function drawText(t, dt){
+  if(!textVisible) return;
+
+  if(textSwitch){
+    textSwitchTimer += dt;
+    if(textSwitchTimer >= TEXT_FADE_DUR){
+      textCurrent = textTarget;
+      textSwitch = false;
+    }
+  }
+
+  // On first click, textCurrent is empty — skip to target immediately
+  let showText;
+  if(textSwitch){
+    if(!textCurrent) showText = textTarget;
+    else showText = textSwitchTimer < TEXT_FADE_DUR/2 ? textCurrent : textTarget;
+  } else {
+    showText = textCurrent;
+  }
+  if(!showText) return;
+
+  // Fade alpha
+  let alpha = 1;
+  if(textSwitch){
+    if(!textCurrent){
+      // First appearance: just fade in
+      alpha = clamp(textSwitchTimer/TEXT_FADE_DUR, 0, 1);
+      alpha = 0.5 - 0.5*Math.cos(alpha*PI);
+    } else {
+      const half = TEXT_FADE_DUR/2;
+      if(textSwitchTimer < half){
+        alpha = 1 - (textSwitchTimer/half);
+      } else {
+        alpha = (textSwitchTimer-half)/half;
+      }
+      alpha = 0.5 - 0.5*Math.cos(alpha*PI);
+    }
+  }
+
+  // Breathing scale
+  const breathe = 1 + 0.02*Math.sin(t*2.2);
+  // Pulse on switch
+  textPulseTimer += dt;
+  const pulse = textPulseTimer < 0.5 ? 1 + 0.15*Math.exp(-textPulseTimer*6) : 1;
+  const scale = breathe * pulse;
+
+  const tx = W/2, ty = 62;
+  ctx.save();
+  ctx.translate(tx, ty);
+  ctx.scale(scale, scale);
+  ctx.font = 'bold 34px Georgia, serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Deep glow
+  ctx.globalAlpha = alpha * 0.3;
+  ctx.fillStyle = 'rgb(180,25,100)';
+  ctx.filter = 'blur(12px)';
+  ctx.fillText(showText, 0, 0);
+  // Mid glow
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.fillStyle = 'rgb(245,95,160)';
+  ctx.filter = 'blur(5px)';
+  ctx.fillText(showText, 0, 0);
+  // Core
+  ctx.filter = 'none';
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = 'rgb(255,238,246)';
+  ctx.fillText(showText, 0, 0);
+
+  ctx.restore();
+  ctx.filter = 'none';
+  ctx.globalAlpha = 1;
+}
+
+// ── Hearts ──
+let heartsActive = false;
+let heartsTimer = 0;
+const hearts = [];
+const HEART_COLORS = [
+  [255,200,220],[230,80,150],[245,120,170],[255,150,190],[200,50,120],
+  [255,180,210],[220,60,130],[240,100,160]
+];
+
+function spawnHeart(){
+  const sz = [9,12,15,18,21][randInt(0,4)];
+  const col = HEART_COLORS[randInt(0,HEART_COLORS.length-1)];
+  hearts.push({
+    x: FLOWER_CX + rand(-30,30),
+    y: FLOWER_CY + rand(-20,10),
+    vx: rand(-15,15),
+    vy: rand(-72,-42),
+    size: sz,
+    color: col,
+    life: 0,
+    maxLife: rand(3.6,5.2),
+    rot: rand(-0.3,0.3),
+    rotSpeed: rand(-0.5,0.5),
+    swayPhase: rand(0,PI*2),
+    swayAmp: rand(15,35),
+    swayFreq: rand(0.8,1.5)
+  });
+}
+
+function drawHeart(cx, cy, size, color, alpha, rot){
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  ctx.scale(size/16, size/16);
+  ctx.globalAlpha = alpha;
+
+  // Heart parametric
+  ctx.beginPath();
+  for(let i=0;i<=100;i++){
+    const t = (i/100)*PI*2;
+    const hx = 16*Math.pow(Math.sin(t),3);
+    const hy = -(13*Math.cos(t) - 5*Math.cos(2*t) - 2*Math.cos(3*t) - Math.cos(4*t));
+    if(i===0) ctx.moveTo(hx,hy); else ctx.lineTo(hx,hy);
+  }
+  ctx.closePath();
+  ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+  ctx.fill();
+
+  // Highlight
+  ctx.beginPath();
+  ctx.arc(-4,-5,4,0,PI*2);
+  ctx.fillStyle = `rgba(255,255,255,0.25)`;
+  ctx.fill();
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+function updateAndDrawHearts(dt){
+  if(!heartsActive) return;
+  heartsTimer += dt;
+
+  // Spawn logic
+  if(hearts.length < 4 && heartsTimer < 0.1){
+    for(let i=0;i<4;i++) spawnHeart();
+  }
+  if(hearts.length < 36){
+    const interval = 0.28;
+    const expected = 4 + Math.floor(heartsTimer/interval);
+    while(hearts.length < Math.min(expected, 36)){
+      spawnHeart();
+    }
+  }
+
+  // Update & draw
+  for(let i=hearts.length-1;i>=0;i--){
+    const h = hearts[i];
+    h.life += dt;
+    if(h.life > h.maxLife){
+      hearts.splice(i,1);
+      continue;
+    }
+    h.x += h.vx*dt + Math.sin(h.life*h.swayFreq+h.swayPhase)*h.swayAmp*dt;
+    h.y += h.vy*dt;
+    h.rot += h.rotSpeed*dt;
+
+    // Alpha: fade in first 15%, fade out after 65%
+    let alpha = 1;
+    const lifeP = h.life/h.maxLife;
+    if(lifeP < 0.15) alpha = lifeP/0.15;
+    else if(lifeP > 0.65) alpha = 1 - (lifeP-0.65)/0.35;
+
+    drawHeart(h.x, h.y, h.size, h.color, clamp(alpha,0,1), h.rot);
+  }
+
+  // Keep spawning if under 36
+  if(heartsActive && hearts.length < 36 && heartsTimer > 0.5){
+    // Already handled above
+  }
+}
+
+// ── Reset ──
+function resetAll(){
+  initPetals();
+  fallingPetals.length = 0;
+  hearts.length = 0;
+  heartsActive = false;
+  heartsTimer = 0;
+  textVisible = false;
+  textCurrent = "";
+  textTarget = "";
+  textSwitch = false;
+  recoil.active = false;
+  shake.active = false;
+  windTime = 0;
+}
+
+// ── Input ──
+function handleClick(e){
+  e.preventDefault();
+  detachPetal();
+}
+canvas.addEventListener('click', handleClick);
+canvas.addEventListener('touchstart', function(e){
+  e.preventDefault();
+  detachPetal();
+}, {passive:false});
+
+document.addEventListener('keydown', function(e){
+  if(e.key==='r'||e.key==='R'||e.key===' '){
+    e.preventDefault();
+    resetAll();
+  }
+});
+
+// ── Init ──
+renderBackground();
+initStars();
+initFireflies();
+initPetalCanvases();
+initPetals();
+
+// ── Main Loop ──
+let lastTime = 0;
+
+function frame(now){
+  requestAnimationFrame(frame);
+  if(!lastTime) lastTime = now;
+  const dt = Math.min((now-lastTime)/1000, 0.05);
+  lastTime = now;
+  windTime += dt;
+
+  // Update timers
+  if(recoil.active) recoil.timer += dt;
+  if(shake.active) shake.timer += dt;
+
+  // Get offsets
+  const wind = getWind(windTime);
+  const recoilOff = getRecoilOffset();
+  const shakeOff = getShakeOffset();
+
+  // Update falling petals
+  updateFallingPetals(dt);
+
+  // ── Draw ──
+  ctx.clearRect(0,0,W,H);
+
+  // Apply shake to everything
+  ctx.save();
+  ctx.translate(shakeOff.x, shakeOff.y);
+
+  // Background
+  ctx.drawImage(bgCanvas, 0, 0);
+
+  // Stars
+  drawStars(windTime);
+
+  // Fireflies
+  drawFireflies(windTime);
+
+  // Stem
+  const stemPts = getStemPoints(wind, recoilOff, windTime);
+  drawStem(stemPts);
+
+  // Leaves
+  drawLeaves(stemPts, windTime);
+
+  // Flower center position
+  const fcx = stemPts[0].x;
+  const fcy = stemPts[0].y;
+
+  // Attached petals
+  drawAttachedPetals(fcx, fcy, windTime);
+
+  // Center (receptacle, stamens, pistil)
+  drawCenter(fcx, fcy, windTime);
+
+  // Falling petals
+  drawFallingPetals();
+
+  // Hearts
+  updateAndDrawHearts(dt);
+
+  ctx.restore();
+
+  // Text (outside shake)
+  drawText(windTime, dt);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
